@@ -40,6 +40,7 @@ int main(int argc, char *argv[])
     char outbuf[100];
     struct gps_data_t gps_data;
     FILE *fifowrite;
+    FILE *livefifowrite;
     memset( timestamp, 0, 30 );
     memset( outbuf, 0, 100 );
     if (0 != gps_open("localhost", "2947", &gps_data)) {
@@ -47,10 +48,24 @@ int main(int argc, char *argv[])
         return 1;
     }
 
+    printf("gpsreader v0.2 \n");
+
     (void)gps_stream(&gps_data, WATCH_ENABLE | WATCH_JSON, NULL);
 
-    while (gps_waiting(&gps_data, 5000000)) {        
+    while (gps_waiting(&gps_data, 5000000)) {      
+        // /tmp/gpssocket provides location to map UI
         fifowrite = fopen("/tmp/gpssocket", "w");
+        // /tmp/livegps provides location to meshpipe.py
+        livefifowrite = fopen("/tmp/livegps", "w");
+        if ( fifowrite == NULL ) 
+        {
+            printf("[ERROR] Cannot open /tmp/gpssocket for writing.\n");
+        }
+        if ( livefifowrite == NULL ) 
+        {
+            printf("[ERROR] Cannot open /tmp/livegps for writing.\n");
+        }
+        
         if ( gps_read(&gps_data, NULL, 0) == -1 ) {
             printf("Read error.\n");
             break;
@@ -66,12 +81,14 @@ int main(int argc, char *argv[])
             strftime(timestamp, 20, "%Y-%m-%d,%H:%M:%S", localtime(&gps_data.fix.time.tv_sec));
         } 
         if (isfinite(gps_data.fix.latitude) && isfinite(gps_data.fix.longitude)) {
-            sprintf(outbuf,"%s,%d,%s,%.6f,%.6f,%0.1f,%1.0f,%d,%d \n",mode_str[gps_data.fix.mode], gps_data.fix.mode,timestamp,gps_data.fix.latitude, gps_data.fix.longitude,gps_data.fix.speed,gps_data.fix.track,gps_data.satellites_used,gps_data.satellites_visible);
+            sprintf(outbuf,"%s,%d,%s,%.8f,%.8f,%0.1f,%1.0f,%d,%d \n",mode_str[gps_data.fix.mode], gps_data.fix.mode,timestamp,gps_data.fix.latitude, gps_data.fix.longitude,gps_data.fix.speed,gps_data.fix.track,gps_data.satellites_used,gps_data.satellites_visible);
         } else {
             sprintf(outbuf,"%s,%d,-,-,-,-,-,-,- \n",mode_str[gps_data.fix.mode], gps_data.fix.mode);
         }
         fprintf(fifowrite,outbuf);
+        fprintf(livefifowrite,outbuf);
         fclose(fifowrite);
+        fclose(livefifowrite);
         memset( outbuf, 0, 100 );
     }
     (void)gps_stream(&gps_data, WATCH_DISABLE, NULL);
