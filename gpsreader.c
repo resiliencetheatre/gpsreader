@@ -121,7 +121,6 @@ int main(int argc, char *argv[])
     
     printf("gpsreader v0.45 \n");
     
-    // WHILE LOOP HERE
     while (1)
     {
         // New era. Base all to location.txt presense.
@@ -130,7 +129,7 @@ int main(int argc, char *argv[])
             printf("Manual location file NOT found. Activating live mode. \n");
             
             if (0 != gps_open("localhost", "2947", &gps_data)) {
-                printf("Cannot connect to port 2947.\n");
+                printf("Cannot connect to port 2947 (gpsd) \n");
                 return 1;
             }
             (void)gps_stream(&gps_data, WATCH_ENABLE | WATCH_JSON, NULL);
