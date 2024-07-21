@@ -111,80 +111,146 @@ int main(int argc, char *argv[])
     FILE *manual_location_file;
     time_t raw_time;
     struct tm *time_info;
-    
+    int time_set = 0;
+    int pos_set = 0;
+    int output_counter=0;
+    int gps_loop_active=0;
     memset( timestamp, 0, 30 );
     memset( outbuf, 0, 100 );
     memset( manual_location_buffer, 0, 256 ); 
-    if (0 != gps_open("localhost", "2947", &gps_data)) {
-        printf("Cannot connect to port 2947.\n");
-        get_manual_position();
-        return 1;
-    }
-    printf("gpsreader v0.43 \n");
-    (void)gps_stream(&gps_data, WATCH_ENABLE | WATCH_JSON, NULL);
-
-        while (gps_waiting(&gps_data, 5000000)) {
+    
+    printf("gpsreader v0.45 \n");
+    
+    // WHILE LOOP HERE
+    while (1)
+    {
+        // New era. Base all to location.txt presense.
+        manual_location_file = fopen("/opt/edgemap-persist/location.txt", "r");
+        if (manual_location_file == NULL) {
+            printf("Manual location file NOT found. Activating live mode. \n");
             
-            fifowrite = fopen("/tmp/gpssocket", "w");
-            livefifowrite = fopen("/tmp/livegps", "w");
-            if ( fifowrite == NULL ) 
-            {
-                printf("[ERROR] Cannot open /tmp/gpssocket for writing.\n");
+            if (0 != gps_open("localhost", "2947", &gps_data)) {
+                printf("Cannot connect to port 2947.\n");
+                return 1;
             }
-            if ( livefifowrite == NULL ) 
-            {
-                printf("[ERROR] Cannot open /tmp/livegps for writing.\n");
-            }
+            (void)gps_stream(&gps_data, WATCH_ENABLE | WATCH_JSON, NULL);
+            gps_loop_active = 1;
             
-                // Get location from file if file is present
+            while (gps_waiting(&gps_data, 5000000) && gps_loop_active ) {
+            
+                fifowrite = fopen("/tmp/gpssocket", "w");
+                livefifowrite = fopen("/tmp/livegps", "w");
+                if ( fifowrite == NULL ) 
+                {
+                    printf("[ERROR] Cannot open /tmp/gpssocket for writing.\n");
+                }
+                if ( livefifowrite == NULL ) 
+                {
+                    printf("[ERROR] Cannot open /tmp/livegps for writing.\n");
+                }
+                if ( gps_read(&gps_data, NULL, 0) == -1 ) {
+                    printf("Read error.\n");
+                    break;
+                }
+                if ( (MODE_SET & gps_data.set) != MODE_SET ) {
+                    continue;
+                }
+                if ( gps_data.fix.mode < 0 || gps_data.fix.mode >= MODE_STR_NUM ) {
+                    gps_data.fix.mode = 0;
+                }
+                if ( (TIME_SET & gps_data.set) == TIME_SET ) {
+                    memset( timestamp, 0, 30 );
+                    strftime(timestamp, 20, "%Y-%m-%d,%H:%M:%S", localtime(&gps_data.fix.time.tv_sec));
+                    time_set = 1;
+                } 
+                if (isfinite(gps_data.fix.latitude) && isfinite(gps_data.fix.longitude)) {
+                    sprintf(outbuf,"%s,%d,%s,%.8f,%.8f,%0.1f,%1.0f,%d,%d \n",mode_str[gps_data.fix.mode], gps_data.fix.mode,timestamp,gps_data.fix.latitude, gps_data.fix.longitude,gps_data.fix.speed,gps_data.fix.track,gps_data.satellites_used,gps_data.satellites_visible);
+                    pos_set = 1;
+                } else {
+                    sprintf(outbuf,"%s,%d,-,-,-,-,-,-,- \n",mode_str[gps_data.fix.mode], gps_data.fix.mode);
+                    pos_set = 1;
+                }
+                output_counter++;
+                // printf("Output counter (gps): %d \n", output_counter);
+                // Scale down write frequency because /tmp/livegps reading rate by meshpipe.py is slower
+                if ( time_set && pos_set && output_counter > 20 ) 
+                {
+                    // printf("Writing output: %s :: %s \n", timestamp, outbuf);
+                    fprintf(fifowrite,outbuf);      // To Meshpipe
+                    fprintf(livefifowrite,outbuf);  // To UI
+                    memset( outbuf, 0, 100 );
+                    time_set=0;
+                    pos_set=0;
+                    output_counter=0;
+                }
+                fclose(fifowrite);
+                fclose(livefifowrite);
+                //
                 manual_location_file = fopen("/opt/edgemap-persist/location.txt", "r");
                 if (manual_location_file != NULL) {
-                    // Get the current time & Convert it to local time representation
-                    time(&raw_time);
-                    time_info = localtime(&raw_time);
-                    memset( timestamp, 0, 30 );
-                    strftime(timestamp, 20, "%Y-%m-%d,%H:%M:%S", time_info );
-                    // Read location file 
-                    if ( fgets(manual_location_buffer, sizeof(manual_location_buffer), manual_location_file) != NULL )
-                    {
-                        remove_last_char(manual_location_buffer);
-                    }
-                    fclose(manual_location_file);                
-                    sprintf(outbuf,"Manual,4,%s,%s,0.0,233,19,0\n",timestamp,manual_location_buffer);
-                    sleep(1);
+                    printf("Manual location file found, switching to manual mode! \n");
+                    fclose(manual_location_file);
+                    gps_loop_active = 0;
                 }
-                else 
-                {
-                    // GPS read if manual location file is not present
-                    if ( gps_read(&gps_data, NULL, 0) == -1 ) {
-                        printf("Read error.\n");
-                        break;
-                    }
-                    if ( (MODE_SET & gps_data.set) != MODE_SET ) {
-                        continue;
-                    }
-                    if ( gps_data.fix.mode < 0 || gps_data.fix.mode >= MODE_STR_NUM ) {
-                        gps_data.fix.mode = 0;
-                    }
-                    if ( (TIME_SET & gps_data.set) == TIME_SET ) {
-                        memset( timestamp, 0, 30 );
-                        strftime(timestamp, 20, "%Y-%m-%d,%H:%M:%S", localtime(&gps_data.fix.time.tv_sec));
-                    } 
-                    if (isfinite(gps_data.fix.latitude) && isfinite(gps_data.fix.longitude)) {
-                        sprintf(outbuf,"%s,%d,%s,%.8f,%.8f,%0.1f,%1.0f,%d,%d \n",mode_str[gps_data.fix.mode], gps_data.fix.mode,timestamp,gps_data.fix.latitude, gps_data.fix.longitude,gps_data.fix.speed,gps_data.fix.track,gps_data.satellites_used,gps_data.satellites_visible);
-                    } else {
-                        sprintf(outbuf,"%s,%d,-,-,-,-,-,-,- \n",mode_str[gps_data.fix.mode], gps_data.fix.mode);
-                    }
-                }
-            
-            fprintf(fifowrite,outbuf);
-            fprintf(livefifowrite,outbuf);
-            fclose(fifowrite);
-            fclose(livefifowrite);
-            memset( outbuf, 0, 100 );
+                
+            }
+            (void)gps_stream(&gps_data, WATCH_DISABLE, NULL);
+            (void)gps_close(&gps_data);
+            // printf("GPS closed!\n");
         }
+        else
+        {
+            // printf("Manual location file found \n");        
+            // Get location from file if file is present
+            manual_location_file = fopen("/opt/edgemap-persist/location.txt", "r");
+            if (manual_location_file != NULL) {
+                // Get the current time & Convert it to local time representation
+                time(&raw_time);
+                time_info = localtime(&raw_time);
+                memset( timestamp, 0, 30 );
+                strftime(timestamp, 20, "%Y-%m-%d,%H:%M:%S", time_info );
+                // Read location file 
+                if ( fgets(manual_location_buffer, sizeof(manual_location_buffer), manual_location_file) != NULL )
+                {
+                    remove_last_char(manual_location_buffer);
+                }
+                fclose(manual_location_file);                
+                sprintf(outbuf,"Manual,4,%s,%s,0.0,233,19,0\n",timestamp,manual_location_buffer);
+                pos_set = 1;
+                time_set = 1;
+                output_counter++;
+                // It's safe to sleep here, because we don't read GPS
+                sleep(2);
+                // printf("Output counter (manual): %d \n", output_counter);
+                if ( output_counter > 5 ) 
+                {
+                    fifowrite = fopen("/tmp/gpssocket", "w");
+                    livefifowrite = fopen("/tmp/livegps", "w");
+                    if ( fifowrite == NULL ) 
+                    {
+                        printf("[ERROR] Cannot open /tmp/gpssocket for writing.\n");
+                    }
+                    if ( livefifowrite == NULL ) 
+                    {
+                        printf("[ERROR] Cannot open /tmp/livegps for writing.\n");
+                    }
+                    fprintf(fifowrite,outbuf);      // To Meshpipe
+                    fprintf(livefifowrite,outbuf);  // To UI
+                    // printf("Wrote manually set position: %s \n", outbuf);
+                    memset( outbuf, 0, 100 );
+                    time_set=0;
+                    pos_set=0;
+                    fclose(fifowrite);
+                    fclose(livefifowrite);
+                    output_counter=0;
+                }
+            }
+        }
+    // printf("Outer while() \n");
+    sleep(1);
+    }
+    
 
-    (void)gps_stream(&gps_data, WATCH_DISABLE, NULL);
-    (void)gps_close(&gps_data);
+    
     return 0;
 }
